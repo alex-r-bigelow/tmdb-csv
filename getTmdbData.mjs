@@ -19,7 +19,7 @@ parser.add_argument('-c', '--csv', {
   required: true,
 });
 parser.add_argument('-p', '--pages', {
-  help: 'number of top-rated movie pages (50 per page) to fetch',
+  help: 'number of top-rated movie pages to fetch',
   default: 1,
 });
 
@@ -60,7 +60,9 @@ const run = async () => {
 
   const checkHeaders = (data, headers, outputFile) => {
     if (headers.all.size === 0) {
-      headers.order = Object.keys(data);
+      headers.order = Object.keys(data).filter(
+        (key) => typeof data[key] !== 'object'
+      );
       headers.all = new Set(headers.order);
       const headerString =
         Papa.unparse([headers.order], {
@@ -68,12 +70,6 @@ const run = async () => {
           header: true,
         }) + '\n';
       fs.writeSync(outputFile, headerString);
-    } else {
-      Object.keys(data).some((key) => {
-        if (!headers.all.has(key)) {
-          throw new Error(`ERROR: Inconsistent person key: ${key}`);
-        }
-      });
     }
   };
 
@@ -108,17 +104,24 @@ const run = async () => {
       console.log(`Loading credits for movie: ${movie.title}`);
       const { cast, crew } = await getMovieCredits(movie.id);
 
-      for await (const credit of cast) {
+      for await (const rawCredit of cast) {
+        const credit = { ...rawCredit, movieId: movie.id };
         checkHeaders(credit, castHeaders, castFile);
         writeLine(credit, castHeaders, castFile);
         queryPerson(credit);
       }
-      for await (const credit of crew) {
+      for await (const rawCredit of crew) {
+        const credit = { ...rawCredit, movieId: movie.id };
         checkHeaders(credit, crewHeaders, crewFile);
         writeLine(credit, crewHeaders, crewFile);
         queryPerson(credit);
       }
     }
   }
+
+  fs.close(moviesFile);
+  fs.close(castFile);
+  fs.close(crewFile);
+  fs.close(peopleFile);
 };
 run();
