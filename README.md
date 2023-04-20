@@ -1,4 +1,4 @@
-# tmdb-scraper
+# tmdb-csv
 
 A simple script for downloading movies as CSVs from TMDB
 
