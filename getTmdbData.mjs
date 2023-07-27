@@ -18,9 +18,17 @@ parser.add_argument('-c', '--csv', {
   help: 'output relational CSV directory',
   required: true,
 });
-parser.add_argument('-p', '--pages', {
-  help: 'number of top-rated movie pages to fetch',
-  default: 1,
+parser.add_argument('-t', '--top_rated', {
+  help: 'number of top_rated movie pages to fetch',
+});
+parser.add_argument('-p', '--popularity', {
+  help: 'number of top-popularity movie pages to fetch',
+});
+parser.add_argument('-v', '--vote_count', {
+  help: 'number of most-voted movie pages to fetch',
+});
+parser.add_argument('-r', '--revenue', {
+  help: 'number of top revenue movie pages to fetch',
 });
 
 const args = parser.parse_args();
@@ -31,14 +39,29 @@ let currentFetch = Promise.resolve();
 const rateLimitedFetch = async (url) => {
   currentFetch = currentFetch.then(
     () =>
-      new Promise((resolve) => setTimeout(() => fetch(url).then(resolve), 100))
+      new Promise((resolve) => setTimeout(() => fetch(url).then(resolve), 50))
   );
   return currentFetch;
 };
 
-const getMovieByTopRatedPage = async (pageNo) =>
+const getMovieByTopRated = async (pageNo) =>
   rateLimitedFetch(
     `https://api.themoviedb.org/3/movie/top_rated?api_key=${args.key}&language=en-US&page=${pageNo}`
+  ).then((result) => result.json());
+
+const getMoviesByPopularity = async (pageNo) =>
+  rateLimitedFetch(
+    `https://api.themoviedb.org/3/discover/movie?sort_by=popularity.desc&api_key=${args.key}&language=en-US&page=${pageNo}`
+  ).then((result) => result.json());
+
+const getMoviesByMostVotes = async (pageNo) =>
+  rateLimitedFetch(
+    `https://api.themoviedb.org/3/discover/movie?sort_by=vote_count.desc&api_key=${args.key}&language=en-US&page=${pageNo}`
+  ).then((result) => result.json());
+
+const getMoviesByTopRevenue = async (pageNo) =>
+  rateLimitedFetch(
+    `https://api.themoviedb.org/3/discover/movie?sort_by=revenue.desc&api_key=${args.key}&language=en-US&page=${pageNo}`
   ).then((result) => result.json());
 
 const getMovieDetails = async (movieId) =>
@@ -56,16 +79,23 @@ const getPersonDetails = async (personId) =>
     `https://api.themoviedb.org/3/person/${personId}?api_key=${args.key}&language=en-US`
   ).then((result) => result.json());
 
+const getCompanyDetails = async (companyId) =>
+  rateLimitedFetch(
+    `https://api.themoviedb.org/3/company/${companyId}?api_key=${args.key}&language=en-US`
+  ).then((result) => result.json());
+
 const run = async () => {
   const moviesPath = path.join(args.csv, 'movies.csv');
   const castPath = path.join(args.csv, 'cast.csv');
   const crewPath = path.join(args.csv, 'crew.csv');
   const peoplePath = path.join(args.csv, 'people.csv');
+  const companyPath = path.join(args.csv, 'company.csv');
 
   const baseFiles = {
     movies: {
       objKey: 'id',
       includedKeys: new Set(),
+      skipKeys: new Set(['adult', 'poster_path']),
       headers: { all: new Set(), order: [] },
       path: moviesPath,
       file: fs.openSync(moviesPath, 'w+'),
@@ -73,6 +103,7 @@ const run = async () => {
     cast: {
       objKey: 'credit_id',
       includedKeys: new Set(),
+      skipKeys: new Set(['adult', 'profile_path']),
       headers: { all: new Set(), order: [] },
       path: castPath,
       file: fs.openSync(castPath, 'w+'),
@@ -80,6 +111,7 @@ const run = async () => {
     crew: {
       objKey: 'credit_id',
       includedKeys: new Set(),
+      skipKeys: new Set(['adult', 'profile_path']),
       headers: { all: new Set(), order: [] },
       path: crewPath,
       file: fs.openSync(crewPath, 'w+'),
@@ -87,9 +119,18 @@ const run = async () => {
     people: {
       objKey: 'id',
       includedKeys: new Set(),
+      skipKeys: new Set(['adult', 'biography', 'profile_path']),
       headers: { all: new Set(), order: [] },
       path: peoplePath,
       file: fs.openSync(peoplePath, 'w+'),
+    },
+    company: {
+      objKey: 'id',
+      includedKeys: new Set(),
+      skipKeys: new Set(['logo_path']),
+      headers: { all: new Set(), order: [] },
+      path: companyPath,
+      file: fs.openSync(companyPath, 'w+'),
     },
   };
   const junctionFiles = {};
@@ -98,6 +139,9 @@ const run = async () => {
     if (baseFile.headers.all.size === 0) {
       const sourceKey = path.basename(baseFile.path, '.csv');
       baseFile.headers.order = Object.keys(data).filter((key) => {
+        if (baseFile.skipKeys?.has(key)) {
+          return false;
+        }
         const isObject = typeof data[key] === 'object' && data[key] !== null;
         if (isObject && Object.keys(data[key]).length > 0) {
           const promotedKey = key;
@@ -106,6 +150,9 @@ const run = async () => {
           const nestedSample = isArray
             ? data[promotedKey][0]
             : data[promotedKey];
+          if (typeof nestedSample === 'string') {
+            return true;
+          }
           const promotedObjKey = FIXED_PROMOTABLE_KEYS.find(
             (pKey) => nestedSample[pKey] !== undefined
           );
@@ -211,19 +258,43 @@ const run = async () => {
     }
   };
 
-  for (let pageNo = 1; pageNo <= parseInt(args.pages); pageNo++) {
-    const movies = await getMovieByTopRatedPage(pageNo);
-    console.log(
-      `Processing ${movies.results.length}${
-        pageNo > 1 ? ' more' : ''
-      } movies...`
-    );
+  const queryCompany = async (company) => {
+    if (!baseFiles.company.includedKeys.has(company.id)) {
+      console.log(`Querying company: ${company.name}`);
+      const companyDetails = await getCompanyDetails(company.id);
+      checkHeaders(companyDetails, baseFiles.company);
+      writeLine(companyDetails, baseFiles.company);
 
-    for await (const movie of movies.results) {
+      if (companyDetails.parent_company) {
+        const parentCompanies =
+          companyDetails.parent_company instanceof Array
+            ? companyDetails.parent_company
+            : [companyDetails.parent_company];
+        for await (const parentCompany of parentCompanies) {
+          await queryCompany(parentCompany);
+        }
+      }
+    }
+  };
+
+  const queryMovie = async (movie) => {
+    if (baseFiles.movies.includedKeys.has(movie.id)) {
+      console.log(`Already Queried movie: ${movie.title} (skipping)`);
+    } else {
       console.log(`Querying movie: ${movie.title}`);
       const movieDetails = await getMovieDetails(movie.id);
       checkHeaders(movieDetails, baseFiles.movies);
       writeLine(movieDetails, baseFiles.movies);
+
+      if (movieDetails.production_companies) {
+        const companies =
+          movieDetails.production_companies instanceof Array
+            ? movieDetails.production_companies
+            : [movieDetails.production_companies];
+        for await (const company of companies) {
+          await queryCompany(company);
+        }
+      }
 
       console.log(`Querying credits for movie: ${movie.title}`);
       const { cast, crew } = await getMovieCredits(movie.id);
@@ -241,6 +312,34 @@ const run = async () => {
         await queryPerson(credit);
       }
     }
+  };
+
+  const queryMoviePages = async (pageCount, queryFunc) => {
+    for (let pageNo = 1; pageNo <= pageCount; pageNo++) {
+      const movies = await queryFunc(pageNo);
+      console.log(
+        `Processing ${movies.results.length}${
+          pageNo > 1 ? ' more' : ''
+        } movies...`
+      );
+
+      for await (const movie of movies.results) {
+        await queryMovie(movie);
+      }
+    }
+  };
+
+  if (args.popularity) {
+    await queryMoviePages(parseInt(args.popularity), getMoviesByPopularity);
+  }
+  if (args.vote_count) {
+    await queryMoviePages(parseInt(args.vote_count), getMoviesByMostVotes);
+  }
+  if (args.revenue) {
+    await queryMoviePages(parseInt(args.revenue), getMoviesByTopRevenue);
+  }
+  if (args.top_rated) {
+    await queryMoviePages(parseInt(args.top_rated), getMovieByTopRated);
   }
 
   Object.values(baseFiles).forEach(({ file }) => fs.close(file));
