@@ -39,7 +39,7 @@ let currentFetch = Promise.resolve();
 const rateLimitedFetch = async (url) => {
   currentFetch = currentFetch.then(
     () =>
-      new Promise((resolve) => setTimeout(() => fetch(url).then(resolve), 50))
+      new Promise((resolve) => setTimeout(() => fetch(url).then(resolve), 25))
   );
   return currentFetch;
 };
@@ -95,7 +95,14 @@ const run = async () => {
     movies: {
       objKey: 'id',
       includedKeys: new Set(),
-      skipKeys: new Set(['adult', 'poster_path']),
+      skipKeys: new Set(['adult', 'backdrop_path', 'poster_path']),
+      knownObjectKeys: new Set([
+        'belongs_to_collection',
+        'genres',
+        'production_companies',
+        'production_countries',
+        'spoken_languages',
+      ]),
       headers: { all: new Set(), order: [] },
       path: moviesPath,
       file: fs.openSync(moviesPath, 'w+'),
@@ -128,6 +135,7 @@ const run = async () => {
       objKey: 'id',
       includedKeys: new Set(),
       skipKeys: new Set(['logo_path']),
+      knownObjectKeys: new Set(['parent_company']),
       headers: { all: new Set(), order: [] },
       path: companyPath,
       file: fs.openSync(companyPath, 'w+'),
@@ -142,14 +150,19 @@ const run = async () => {
         if (baseFile.skipKeys?.has(key)) {
           return false;
         }
-        const isObject = typeof data[key] === 'object' && data[key] !== null;
-        if (isObject && Object.keys(data[key]).length > 0) {
+        if (
+          typeof data[key] === 'object' ||
+          baseFile.knownObjectKeys?.has(key)
+        ) {
           const promotedKey = key;
           const junctionKey = `${sourceKey}_${promotedKey}`;
           const isArray = data[promotedKey] instanceof Array;
           const nestedSample = isArray
             ? data[promotedKey][0]
             : data[promotedKey];
+          if (nestedSample === null || Object.keys(data[key]).length === 0) {
+            return false;
+          }
           if (typeof nestedSample === 'string') {
             return true;
           }
@@ -168,13 +181,15 @@ const run = async () => {
           }
           if (!baseFiles[promotedKey]) {
             const promotedFilePath = path.join(args.csv, `${promotedKey}.csv`);
-            console.log(
-              `Promoting nested objects as ${promotedFilePath} that look like: ${JSON.stringify(
-                nestedSample,
-                null,
-                2
-              )}`
-            );
+            if (!baseFile.knownObjectKeys?.has(promotedKey)) {
+              console.log(
+                `Promoting nested objects as ${promotedFilePath} that look like: ${JSON.stringify(
+                  nestedSample,
+                  null,
+                  2
+                )}`
+              );
+            }
             baseFiles[promotedKey] = {
               objKey: promotedObjKey,
               includedKeys: new Set(),
@@ -194,8 +209,9 @@ const run = async () => {
             { [sourceKey]: '', [promotedKey]: '' },
             junctionFiles[junctionKey]
           );
+          return false;
         }
-        return !isObject;
+        return true;
       });
       baseFile.headers.all = new Set(baseFile.headers.order);
       const headerString =
