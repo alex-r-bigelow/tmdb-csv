@@ -39,7 +39,7 @@ let currentFetch = Promise.resolve();
 const rateLimitedFetch = async (url) => {
   currentFetch = currentFetch.then(
     () =>
-      new Promise((resolve) => setTimeout(() => fetch(url).then(resolve), 25))
+      new Promise((resolve) => setTimeout(() => fetch(url).then(resolve), 0))
   );
   return currentFetch;
 };
@@ -103,7 +103,7 @@ const run = async () => {
         'production_countries',
         'spoken_languages',
       ]),
-      headers: { all: new Set(), order: [] },
+      headers: [],
       path: moviesPath,
       file: fs.openSync(moviesPath, 'w+'),
     },
@@ -111,7 +111,7 @@ const run = async () => {
       objKey: 'credit_id',
       includedKeys: new Set(),
       skipKeys: new Set(['adult', 'profile_path']),
-      headers: { all: new Set(), order: [] },
+      headers: [],
       path: castPath,
       file: fs.openSync(castPath, 'w+'),
     },
@@ -119,7 +119,7 @@ const run = async () => {
       objKey: 'credit_id',
       includedKeys: new Set(),
       skipKeys: new Set(['adult', 'profile_path']),
-      headers: { all: new Set(), order: [] },
+      headers: [],
       path: crewPath,
       file: fs.openSync(crewPath, 'w+'),
     },
@@ -127,7 +127,7 @@ const run = async () => {
       objKey: 'id',
       includedKeys: new Set(),
       skipKeys: new Set(['adult', 'biography', 'profile_path']),
-      headers: { all: new Set(), order: [] },
+      headers: [],
       path: peoplePath,
       file: fs.openSync(peoplePath, 'w+'),
     },
@@ -136,7 +136,7 @@ const run = async () => {
       includedKeys: new Set(),
       skipKeys: new Set(['logo_path']),
       knownObjectKeys: new Set(['parent_company']),
-      headers: { all: new Set(), order: [] },
+      headers: [],
       path: companyPath,
       file: fs.openSync(companyPath, 'w+'),
     },
@@ -144,15 +144,17 @@ const run = async () => {
   const junctionFiles = {};
 
   const checkHeaders = (data, baseFile) => {
-    if (baseFile.headers.all.size === 0) {
+    if (baseFile.headers.length === 0) {
       const sourceKey = path.basename(baseFile.path, '.csv');
-      baseFile.headers.order = Object.keys(data).filter((key) => {
+      baseFile.headers = Object.keys(data).filter((key) => {
         if (baseFile.skipKeys?.has(key)) {
           return false;
         }
         if (
-          typeof data[key] === 'object' ||
-          baseFile.knownObjectKeys?.has(key)
+          baseFile.knownObjectKeys?.has(key) ||
+          (typeof data[key] === 'object' &&
+            data[key] !== null &&
+            Object.keys(data[key]).length > 0)
         ) {
           const promotedKey = key;
           const junctionKey = `${sourceKey}_${promotedKey}`;
@@ -160,9 +162,6 @@ const run = async () => {
           const nestedSample = isArray
             ? data[promotedKey][0]
             : data[promotedKey];
-          if (nestedSample === null || Object.keys(data[key]).length === 0) {
-            return false;
-          }
           if (typeof nestedSample === 'string') {
             return true;
           }
@@ -193,13 +192,13 @@ const run = async () => {
             baseFiles[promotedKey] = {
               objKey: promotedObjKey,
               includedKeys: new Set(),
-              headers: { all: new Set(), order: [] },
+              headers: [],
               path: promotedFilePath,
               file: fs.openSync(promotedFilePath, 'w+'),
             };
             const junctionFilePath = path.join(args.csv, `${junctionKey}.csv`);
             junctionFiles[junctionKey] = {
-              headers: { all: new Set(), order: [] },
+              headers: [],
               path: junctionFilePath,
               file: fs.openSync(junctionFilePath, 'w+'),
             };
@@ -213,10 +212,9 @@ const run = async () => {
         }
         return true;
       });
-      baseFile.headers.all = new Set(baseFile.headers.order);
       const headerString =
-        Papa.unparse([baseFile.headers.order], {
-          columns: baseFile.headers.order,
+        Papa.unparse([baseFile.headers], {
+          columns: baseFile.headers,
           header: true,
         }) + '\n';
       fs.writeSync(baseFile.file, headerString);
@@ -234,7 +232,7 @@ const run = async () => {
     }
     const outputString =
       Papa.unparse([data], {
-        columns: baseFile.headers.order,
+        columns: baseFile.headers,
         header: false,
         newline: '\n',
       }) + '\n';
@@ -345,6 +343,9 @@ const run = async () => {
     }
   };
 
+  if (args.top_rated) {
+    await queryMoviePages(parseInt(args.top_rated), getMovieByTopRated);
+  }
   if (args.popularity) {
     await queryMoviePages(parseInt(args.popularity), getMoviesByPopularity);
   }
@@ -353,9 +354,6 @@ const run = async () => {
   }
   if (args.revenue) {
     await queryMoviePages(parseInt(args.revenue), getMoviesByTopRevenue);
-  }
-  if (args.top_rated) {
-    await queryMoviePages(parseInt(args.top_rated), getMovieByTopRated);
   }
 
   Object.values(baseFiles).forEach(({ file }) => fs.close(file));
